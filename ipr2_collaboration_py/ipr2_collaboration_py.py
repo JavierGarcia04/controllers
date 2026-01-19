@@ -215,12 +215,33 @@ class IPR2Collaboration(Robot):
 
     def throw_cube(self):
         """Throw the cube into the box."""
-        self.move_to_position(THROW_POSITION, False)
+        # First move to a "wind-up" position to ensure consistent throw momentum
+        # Go back further than THROW_POSITION to build up rotation speed
+        WINDUP_BASE_POSITION = 1.5  # Start further back for more momentum
+        
+        # Set all motors to throw position first
+        for i in range(GRIPPER_MOTOR):
+            if i == BASE_MOTOR:
+                self.set_motor_position(i, WINDUP_BASE_POSITION)
+            else:
+                self.set_motor_position(i, THROW_POSITION[i])
+        
+        # Wait for all motors to reach position
+        for i in range(GRIPPER_MOTOR):
+            if i == BASE_MOTOR:
+                while not self.position_reached(i, WINDUP_BASE_POSITION):
+                    self.step(self.time_step)
+            else:
+                while not self.position_reached(i, THROW_POSITION[i]):
+                    self.step(self.time_step)
+        
+        # Small delay to stabilize before throwing
+        self.simulation_step(5)
 
-        # Rotate base
+        # Rotate base - the full swing from 1.5 to 5.95391
         self.set_motor_position(BASE_MOTOR, 5.95391)
 
-        # Check distance from target
+        # Check distance from target - release point
         while True:
             if self.motor_position(BASE_MOTOR) > 5.30:
                 break
