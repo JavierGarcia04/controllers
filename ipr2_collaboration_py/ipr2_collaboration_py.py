@@ -16,8 +16,8 @@
 Description: Example of collaborative work between two IPRs.
              Communication between robots is achieved using
              Emitter and Receiver devices.
-             Control the IPR2 to take the cube passed by the
-             other robot and throw it in the box.
+             Control the IPR2 to take cubes and balls passed by the
+             other robot and throw them in boxes.
 """
 
 from controller import Robot
@@ -44,13 +44,23 @@ GRAB_CUBE = 0
 GIVE_CUBE = 1
 LEAVE_CUBE = 2
 THROW_CUBE = 3
+# States for extra cubes (second batch)
+GRAB_EXTRA = 4
+GIVE_EXTRA = 5
+LEAVE_EXTRA = 6
+THROW_EXTRA = 7
 
-OBJECT_NUMBER = 3
+CUBE_NUMBER = 3
+EXTRA_CUBE_NUMBER = 1  # 1 extra cube (4 cubes total)
 
-# IPR2 poses
+# IPR2 poses for cubes (original box)
 WAIT_POSITION = [3.004520, -0.03308, 2.39263, -2.27029, 0.00000, 0.66207]
 GRAB_POSITION = [3.004520, -0.03307, 3.47000, -2.27029, 0.00000, 0.66207]
 THROW_POSITION = [2.513930, -0.00000, 3.39598, -2.27029, -1.33815, 0.00000]
+
+# IPR2 poses for balls (new box caja2 at 0.37, 0.65)
+# The new box is in a different direction, need to adjust throw
+THROW_POSITION_CAJA2 = [4.200000, -0.00000, 3.39598, -2.27029, -1.33815, 0.00000]
 
 
 def motor_name(motor_index):
@@ -67,7 +77,7 @@ def motor_name(motor_index):
 
 
 class IPR2Collaboration(Robot):
-    """IPR2 robot controller for collaborative cube catching and throwing."""
+    """IPR2 robot controller for collaborative cube and ball catching and throwing."""
 
     def __init__(self):
         super().__init__()
@@ -213,14 +223,34 @@ class IPR2Collaboration(Robot):
         message = struct.pack('i', state_signal)
         self.emitter.send(message)
 
-    def throw_cube(self):
-        """Throw the cube into the box."""
-        self.move_to_position(THROW_POSITION, False)
+    def throw_to_box1(self):
+        """Throw the cube into the original box."""
+        # Wind-up position for consistent throw
+        WINDUP_BASE_POSITION = 1.5
+        
+        # Set all motors to throw position first
+        for i in range(GRIPPER_MOTOR):
+            if i == BASE_MOTOR:
+                self.set_motor_position(i, WINDUP_BASE_POSITION)
+            else:
+                self.set_motor_position(i, THROW_POSITION[i])
+        
+        # Wait for all motors to reach position
+        for i in range(GRIPPER_MOTOR):
+            if i == BASE_MOTOR:
+                while not self.position_reached(i, WINDUP_BASE_POSITION):
+                    self.step(self.time_step)
+            else:
+                while not self.position_reached(i, THROW_POSITION[i]):
+                    self.step(self.time_step)
+        
+        # Small delay to stabilize before throwing
+        self.simulation_step(5)
 
-        # Rotate base
+        # Rotate base - the full swing
         self.set_motor_position(BASE_MOTOR, 5.95391)
 
-        # Check distance from target
+        # Check distance from target - release point
         while True:
             if self.motor_position(BASE_MOTOR) > 5.30:
                 break
@@ -240,34 +270,99 @@ class IPR2Collaboration(Robot):
         while not self.position_reached(GRIPPER_MOTOR, 0.72):
             self.step(self.time_step)
 
-    def take_cube(self):
-        """Take the cube from the other robot."""
-        self.wait_for_signal(GIVE_CUBE)
+    def throw_to_box2(self):
+        """Throw the ball into the new box (caja2 at 0.37, 0.65)."""
+        # Wind-up position for throw to caja2
+        # caja2 is at a different angle, so we need different parameters
+        WINDUP_BASE_POSITION = 3.0
+        TARGET_BASE_POSITION = 0.3  # Throw towards caja2 direction
+        RELEASE_THRESHOLD = 0.8
+        
+        # Set all motors to throw position first
+        for i in range(GRIPPER_MOTOR):
+            if i == BASE_MOTOR:
+                self.set_motor_position(i, WINDUP_BASE_POSITION)
+            else:
+                self.set_motor_position(i, THROW_POSITION_CAJA2[i])
+        
+        # Wait for all motors to reach position
+        for i in range(GRIPPER_MOTOR):
+            if i == BASE_MOTOR:
+                while not self.position_reached(i, WINDUP_BASE_POSITION):
+                    self.step(self.time_step)
+            else:
+                while not self.position_reached(i, THROW_POSITION_CAJA2[i]):
+                    self.step(self.time_step)
+        
+        # Small delay to stabilize before throwing
+        self.simulation_step(5)
 
-        self.open_gripper()
+        # Rotate base towards caja2
+        self.set_motor_position(BASE_MOTOR, TARGET_BASE_POSITION)
+
+        # Check distance from target - release point
+        while True:
+            if self.motor_position(BASE_MOTOR) < RELEASE_THRESHOLD:
+                break
+            self.step(self.time_step)
+
+        # Open gripper at the right moment
+        self.set_motor_position(GRIPPER_MOTOR, 0.72)
+
+        # Raise arm so that it can throw better
+        self.set_motor_position(UPPER_ARM_MOTOR, -0.0330743)
+
+        # Wait until movement completed
+        while not self.position_reached(BASE_MOTOR, TARGET_BASE_POSITION):
+            self.step(self.time_step)
+        while not self.position_reached(UPPER_ARM_MOTOR, -0.0330743):
+            self.step(self.time_step)
+        while not self.position_reached(GRIPPER_MOTOR, 0.72):
+            self.step(self.time_step)
+
+    def take_object(self, give_signal, leave_signal, throw_signal):
+        """Take the object from the other robot."""
+        self.wait_for_signal(give_signal)
+
+        # Open gripper to MAXIMUM before approaching to avoid collision
+        self.open_gripper(1.2)
 
         self.move_to_position(GRAB_POSITION)
 
         self.close_gripper()
+        
+        # Wait a moment to ensure good grip before signaling
+        self.simulation_step(10)
 
-        self.emit_signal(LEAVE_CUBE)
+        self.emit_signal(leave_signal)
 
-        self.wait_for_signal(THROW_CUBE)
+        self.wait_for_signal(throw_signal)
 
 
 def main():
     ipr = IPR2Collaboration()
 
-    for i in range(OBJECT_NUMBER):
+    # Phase 1: Catch and throw all cubes to box1
+    for i in range(CUBE_NUMBER):
         ipr.move_to_position(WAIT_POSITION)
-        ipr.take_cube()
-        if i < (OBJECT_NUMBER - 1):
+        ipr.take_object(GIVE_CUBE, LEAVE_CUBE, THROW_CUBE)
+        if i < (CUBE_NUMBER - 1):
             ipr.emit_signal(GRAB_CUBE)
-        ipr.throw_cube()
+        ipr.throw_to_box1()
+
+    # Signal IPR1 to start with extra cubes
+    ipr.emit_signal(GRAB_EXTRA)
+
+    # Phase 2: Catch and throw extra cubes to SAME box (box1)
+    for i in range(EXTRA_CUBE_NUMBER):
+        ipr.move_to_position(WAIT_POSITION)
+        ipr.take_object(GIVE_EXTRA, LEAVE_EXTRA, THROW_EXTRA)
+        if i < (EXTRA_CUBE_NUMBER - 1):
+            ipr.emit_signal(GRAB_EXTRA)
+        ipr.throw_to_box1()  # Same box as original cubes
 
     ipr.move_to_init_position()
 
 
 if __name__ == "__main__":
     main()
-

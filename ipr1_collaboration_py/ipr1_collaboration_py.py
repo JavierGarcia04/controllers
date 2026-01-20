@@ -16,7 +16,7 @@
 Description: Example of collaborative work between two IPRs.
              Communication between robots is achieved using
              Emitter and Receiver devices.
-             Control the IPR1 to grab and pass the cube.
+             Control the IPR1 to grab and pass cubes and balls.
 """
 
 from controller import Robot
@@ -43,17 +43,37 @@ GRAB_CUBE = 0
 GIVE_CUBE = 1
 LEAVE_CUBE = 2
 THROW_CUBE = 3
+# States for extra cubes (second batch)
+GRAB_EXTRA = 4
+GIVE_EXTRA = 5
+LEAVE_EXTRA = 6
+THROW_EXTRA = 7
 
-OBJECT_NUMBER = 3
+CUBE_NUMBER = 3
+EXTRA_CUBE_NUMBER = 1  # 1 extra cube (4 cubes total)
 
-# IPR1 poses
-GRAB_POSITIONS = [
+# IPR1 poses for cubes
+GRAB_CUBE_POSITIONS = [
     [0.390582, -2.26583, 1.91850, -2.88388, -2.45437, 0.66207],
     [0.000010, -2.27120, 1.91850, -2.82253, -3.00660, 0.66207],
     [5.690000, -2.24000, 1.86000, -2.91500, -0.40000, 0.90000]
 ]
 
+# IPR1 poses for extra cubes (2 additional cubes)
+# Extra cube positions: cube1(1) at (-0.045, -1.42), cube2(1) at (-0.17, -1.429)
+# Reference: cube2 original at (-0.17, -1.35) uses BASE=5.69, UPPER=-2.24
+# - cube1(1): x=-0.045, y=-1.42 -> BASE ~6.2
+# - cube2(1): x=-0.17 (same as cube2), y=-1.429 (further) -> BASE=5.69, more extension
+GRAB_EXTRA_POSITIONS = [
+    [6.000000, -2.27120, 1.91850, -2.82253, -3.00660, 0.66207],  # cube1(1) at (-0.045, -1.42)
+    [5.690000, -2.30000, 1.91850, -2.91500, -0.40000, 0.90000]   # cube2(1) at (-0.17, -1.429)
+]
+
 DROP_POSITION = [3.016690, -0.86002, 0.77181, -1.96350, -1.22718, 0.66207, -0.66207]
+
+# Alternative drop position for extra cubes (coming from left side) to avoid collision
+# Slightly different BASE to create a different approach angle
+DROP_POSITION_EXTRA = [3.200000, -0.86002, 0.77181, -1.96350, -1.22718, 0.66207, -0.66207]
 
 
 def motor_name(motor_index):
@@ -70,7 +90,7 @@ def motor_name(motor_index):
 
 
 class IPR1Collaboration(Robot):
-    """IPR1 robot controller for collaborative cube passing."""
+    """IPR1 robot controller for collaborative cube and ball passing."""
 
     def __init__(self):
         super().__init__()
@@ -200,8 +220,8 @@ class IPR1Collaboration(Robot):
             previous_gripper_position = current_gripper_position
             self.step(self.time_step)
 
-    def grab_cube(self, grab_position):
-        """Grab a cube at the specified position."""
+    def grab_object(self, grab_position):
+        """Grab an object (cube or ball) at the specified position."""
         # Set motors position objectives
         for i in range(MOTOR_NUMBER):
             if i == UPPER_ARM_MOTOR:
@@ -245,14 +265,19 @@ class IPR1Collaboration(Robot):
         message = struct.pack('i', state_signal)
         self.emitter.send(message)
 
-    def give_cube(self):
-        """Give the cube to the other robot."""
+    def give_object(self, give_signal, leave_signal, throw_signal, drop_position=None):
+        """Give the object to the other robot."""
+        if drop_position is None:
+            drop_position = DROP_POSITION
         self.set_motor_position(UPPER_ARM_MOTOR, -0.726919)
         self.simulation_step(5)
-        self.move_to_position(DROP_POSITION, False)
+        self.move_to_position(drop_position, False)
 
-        self.emit_signal(GIVE_CUBE)
-        self.wait_for_signal(LEAVE_CUBE)
+        self.emit_signal(give_signal)
+        self.wait_for_signal(leave_signal)
+
+        # Wait a moment to let the other robot grip the cube securely
+        self.simulation_step(15)
 
         self.open_gripper(1.0)
 
@@ -266,22 +291,33 @@ class IPR1Collaboration(Robot):
         while not self.position_reached(UPPER_ARM_MOTOR, 0.0):
             self.step(self.time_step)
 
-        self.emit_signal(THROW_CUBE)
+        self.emit_signal(throw_signal)
 
 
 def main():
     ipr = IPR1Collaboration()
 
-    for i in range(OBJECT_NUMBER):
+    # Phase 1: Pass all cubes
+    for i in range(CUBE_NUMBER):
         if i > 0:
             ipr.wait_for_signal(GRAB_CUBE)
 
-        ipr.grab_cube(GRAB_POSITIONS[i])
-        ipr.give_cube()
+        ipr.grab_object(GRAB_CUBE_POSITIONS[i])
+        ipr.give_object(GIVE_CUBE, LEAVE_CUBE, THROW_CUBE)
+
+    # Phase 2: Pass extra cubes to same box as original cubes
+    for i in range(EXTRA_CUBE_NUMBER):
+        if i > 0:
+            ipr.wait_for_signal(GRAB_EXTRA)
+        else:
+            # Wait for signal that first batch of cubes is done
+            ipr.wait_for_signal(GRAB_EXTRA)
+
+        ipr.grab_object(GRAB_EXTRA_POSITIONS[i])
+        ipr.give_object(GIVE_EXTRA, LEAVE_EXTRA, THROW_EXTRA)  # Same drop position as first 3 cubes
 
     ipr.move_to_init_position()
 
 
 if __name__ == "__main__":
     main()
-
